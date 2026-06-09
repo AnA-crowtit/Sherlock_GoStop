@@ -1,9 +1,10 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // 🌐 인터넷 실시간 환율 변수
 let exchangeRate = 1400;
 let currentPlayersArray = [];
+let approvedSettlementsArray = []; // 📜 [신규] 기록실 기반 정산 매칭을 위한 실제 판 내역 배열
 
 // 🔥 파이어베이스 설정값
 const firebaseConfig = {
@@ -40,49 +41,53 @@ async function fetchRealtimeExchangeRate() {
     }
 }
 
-// --- 0-2. [신규] 현재 전체 자산 기준 최적의 주고받을 돈 계산 알고리즘 ---
-function calculateOptimalDebts(players) {
-    let debtors = [];   // 돈을 줘야 하는 사람들 (-)
-    let creditors = []; // 돈을 받아야 하는 사람들 (+)
+// --- 0-2. [신규] 기록실 데이터와 100% 연동되는 채무 상계 알고리즘 ---
+function calculateHistoryDebts() {
+    let directDebts = {};
 
-    players.forEach(p => {
-        if (p.total_money < 0) {
-            debtors.push({ id: p.id, name: p.name, amount: -p.total_money });
-        } else if (p.total_money > 0) {
-            creditors.push({ id: p.id, name: p.name, amount: p.total_money });
+    // 1. 승인 완료된 모든 판을 돌며 "파산자 ➔ 참여자"에게 생긴 2$ 채무를 전부 누적
+    approvedSettlementsArray.forEach(settle => {
+        const debtor = settle.bankrupt_player_id;
+        const participants = settle.participant_ids || [];
+
+        participants.forEach(pId => {
+            if (pId !== debtor) {
+                if (!directDebts[debtor]) directDebts[debtor] = {};
+                directDebts[debtor][pId] = (directDebts[debtor][pId] || 0) + 2;
+            }
+        });
+    });
+
+    // 2. 모든 플레이어 ID 추출 (탈퇴 멤버 포함 관계 유지를 위해 집합 사용)
+    const allIds = new Set();
+    currentPlayersArray.forEach(p => allIds.add(p.id));
+    Object.keys(directDebts).forEach(id => allIds.add(id));
+    const allIdsArray = Array.from(allIds);
+
+    // 3. 양방향 채무 상계 처리 (A->B 채무와 B->A 채무를 계산해 최종 잔액만 남김)
+    for (let i = 0; i < allIdsArray.length; i++) {
+        for (let j = i + 1; j < allIdsArray.length; j++) {
+            const pA = allIdsArray[i];
+            const pB = allIdsArray[j];
+
+            const openA = directDebts[pA]?.[pB] || 0; // A가 B에게 줄 돈
+            const openB = directDebts[pB]?.[pA] || 0; // B가 A에게 줄 돈
+
+            if (openA > openB) {
+                if (!directDebts[pA]) directDebts[pA] = {};
+                directDebts[pA][pB] = openA - openB;
+                if (directDebts[pB]) delete directDebts[pB][pA];
+            } else if (openB > openA) {
+                if (!directDebts[pB]) directDebts[pB] = {};
+                directDebts[pB][pA] = openB - openA;
+                if (directDebts[pA]) delete directDebts[pA][pB];
+            } else {
+                if (directDebts[pA]) delete directDebts[pA][pB];
+                if (directDebts[pB]) delete directDebts[pB][pA];
+            }
         }
-    });
-
-    // 금액이 큰 순서대로 정렬하여 매칭 효율성 극대화
-    debtors.sort((a, b) => b.amount - a.amount);
-    creditors.sort((a, b) => b.amount - a.amount);
-
-    let givingText = {};
-    let receivingText = {};
-
-    players.forEach(p => {
-        givingText[p.id] = [];
-        receivingText[p.id] = [];
-    });
-
-    let d = 0, c = 0;
-    while (d < debtors.length && c < creditors.length) {
-        let debtor = debtors[d];
-        let creditor = creditors[c];
-
-        let settledAmount = Math.min(debtor.amount, creditor.amount);
-
-        givingText[debtor.id].push(`${creditor.name}(${settledAmount}$)`);
-        receivingText[creditor.id].push(`${debtor.name}(${settledAmount}$)`);
-
-        debtor.amount -= settledAmount;
-        creditor.amount -= settledAmount;
-
-        if (debtor.amount === 0) d++;
-        if (creditor.amount === 0) c++;
     }
-
-    return { givingText, receivingText };
+    return directDebts;
 }
 
 // --- 1. 실시간 플레이어 데이터 구독 및 UI 동기화 ---
@@ -93,6 +98,15 @@ onSnapshot(collection(db, "players"), (snapshot) => {
     });
     renderPlayersUI();
     loadHistory();
+});
+
+// --- 1-2. [신규] 실시간 승인된 정산 내역 구독 (정산 힌트를 기록실과 연동하기 위함) ---
+onSnapshot(query(collection(db, "settlements"), where("status", "==", "approved")), (snapshot) => {
+    approvedSettlementsArray = [];
+    snapshot.forEach((doc) => {
+        approvedSettlementsArray.push({ id: doc.id, ...doc.data() });
+    });
+    renderPlayersUI();
 });
 
 function renderPlayersUI() {
@@ -107,17 +121,47 @@ function renderPlayersUI() {
     checkboxContainer.innerHTML = "";
     playersData = {};
 
+    // ID 매칭용 딕셔너리 먼저 구축
+    currentPlayersArray.forEach((player) => {
+        playersData[player.id] = player;
+    });
+
     // 보유 자산 기준 내림차순 정렬
     currentPlayersArray.sort((a, b) => b.total_money - a.total_money);
 
-    // 💡 [신규] 최적 송금 네트워크 미리 계산
-    const { givingText, receivingText } = calculateOptimalDebts(currentPlayersArray);
+    // 💡 실제 게임 기록실 데이터를 바탕으로 정산 네트워크 빌드
+    const directDebts = calculateHistoryDebts();
+
+    let givingText = {};
+    let receivingText = {};
+
+    currentPlayersArray.forEach(p => {
+        givingText[p.id] = [];
+        receivingText[p.id] = [];
+    });
+
+    // 채무 관계 문자열 포맷팅 생성
+    Object.keys(directDebts).forEach(debtorId => {
+        Object.keys(directDebts[debtorId]).forEach(creditorId => {
+            const amount = directDebts[debtorId][creditorId];
+            if (amount > 0) {
+                const debtorName = playersData[debtorId]?.name || "탈퇴 멤버";
+                const creditorName = playersData[creditorId]?.name || "탈퇴 멤버";
+
+                if (givingText[debtorId]) {
+                    givingText[debtorId].push(`${creditorName}(${amount}$)`);
+                }
+                if (receivingText[creditorId]) {
+                    receivingText[creditorId].push(`${debtorName}(${amount}$)`);
+                }
+            }
+        });
+    });
 
     currentPlayersArray.forEach((player) => {
-        playersData[player.id] = player;
         const krwMoney = Math.floor(player.total_money * exchangeRate).toLocaleString('ko-KR');
 
-        // 💡 [신규] 개인별 송금/수령 힌트 라벨 빌드
+        // 💡 기록실 기반 개인별 송금/수령 힌트 라벨 정의
         const gives = givingText[player.id] || [];
         const receives = receivingText[player.id] || [];
         let settlementHint = "";
@@ -130,7 +174,7 @@ function renderPlayersUI() {
             settlementHint = `<span class="text-[11px] text-gray-400 block font-normal mt-0.5">✅ 정산 완료</span>`;
         }
 
-        // 메인 화면 출력 (이름 아래에 정산 힌트 주입)
+        // 메인 화면 출력
         const row = document.createElement("div");
         row.className = "flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-200/60";
         row.innerHTML = `
@@ -152,18 +196,11 @@ function renderPlayersUI() {
                              <span class="text-gray-700 select-none">${player.name}</span>`;
         checkboxContainer.appendChild(cbLabel);
 
-        // 관리자용 목록 생성 (자산 수동 수정 필드 포함)
+        // 관리자용 목록 생성
         const adminRow = document.createElement("div");
-        adminRow.className = "flex flex-col sm:flex-row sm:items-center justify-between p-2.5 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded gap-2";
-        adminRow.innerHTML = `
-            <span class="font-medium text-gray-700">${player.name} (현재: ${player.total_money}$)</span>
-            <div class="flex items-center gap-1.5 justify-end">
-                <input type="number" id="updateMoney-${player.id}" value="${player.total_money}" class="w-16 border rounded px-1.5 py-0.5 text-right focus:outline-none focus:ring-1 focus:ring-red-400 font-mono">
-                <span class="text-gray-400">$</span>
-                <button onclick="updatePlayerMoney('${player.id}', '${player.name}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-0.5 rounded font-semibold transition">수정</button>
-                <button onclick="deletePlayer('${player.id}', '${player.name}')" class="text-gray-400 hover:text-red-600 font-semibold ml-1">삭제</button>
-            </div>
-        `;
+        adminRow.className = "flex justify-between items-center p-2 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded";
+        adminRow.innerHTML = `<span class="font-medium text-gray-700">${player.name} (${player.total_money}$ / 약 ${krwMoney}원)</span>
+                              <button onclick="deletePlayer('${player.id}', '${player.name}')" class="text-red-500 hover:text-red-700 font-semibold hover:underline">삭제</button>`;
         adminPlayerList.appendChild(adminRow);
     });
 }
@@ -203,25 +240,6 @@ window.addPlayer = async () => {
 window.deletePlayer = async (id, name) => {
     if (confirm(`${name} 플레이어를 영구 삭제하시겠습니까?\n(해당 인원의 정산금 누적 데이터가 모두 삭제됩니다)`)) {
         await deleteDoc(doc(db, "players", id));
-    }
-};
-
-// --- 3-2. 관리자 자산 직접 수정 기능 ---
-window.updatePlayerMoney = async (id, name) => {
-    const inputElement = document.getElementById(`updateMoney-${id}`);
-    const newMoney = parseInt(inputElement.value, 10);
-
-    if (isNaN(newMoney)) return alert("정확한 금액(정수)을 입력해주세요.");
-
-    if (confirm(`${name} 님의 최종 자산을 [ ${newMoney}$ ] 로 강제 수정하시겠습니까?`)) {
-        try {
-            const playerRef = doc(db, "players", id);
-            await updateDoc(playerRef, { total_money: newMoney });
-            alert(`${name} 님의 자산이 성공적으로 변경되었습니다.`);
-        } catch (err) {
-            console.error(err);
-            alert("자산 수정 중 오류가 발생했습니다.");
-        }
     }
 };
 
@@ -408,50 +426,16 @@ window.loadHistory = async () => {
             const bName = playersData[data.bankrupt_player_id]?.name || "탈퇴 멤버";
 
             const tr = document.createElement("tr");
-            tr.className = "hover:bg-gray-50/70 transition text-gray-700 cursor-pointer border-b last:border-0";
+            tr.className = "hover:bg-gray-50/70 transition text-gray-700";
             tr.innerHTML = `
                 <td class="p-3 text-xs text-gray-500 font-mono">${dateStr}</td>
                 <td class="p-3 font-medium">${pNames}</td>
-                <td class="p-3 text-red-600 font-bold">${bName} <span class="text-gray-400 text-[10px] font-normal ml-1">▼</span></td>
+                <td class="p-3 text-red-600 font-bold">${bName}</td>
             `;
-
-            const trDetail = document.createElement("tr");
-            trDetail.className = "hidden bg-gray-50/60 text-xs text-gray-600 border-b last:border-0";
-
-            const pCount = data.participant_ids?.length || 0;
-            const loss = (pCount - 1) * 2;
-            const receivers = data.participant_ids?.filter(id => id !== data.bankrupt_player_id)
-                .map(id => playersData[id]?.name || "탈퇴 멤버")
-                .join(", ") || "없음";
-
-            trDetail.innerHTML = `
-                <td colspan="3" class="p-3 bg-blue-50/20">
-                    <div class="bg-white p-3 rounded-lg border border-gray-200/80 shadow-inner space-y-2">
-                        <div class="flex items-center gap-1.5">
-                            <span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold text-[10px]">지급</span>
-                            <span class="font-bold text-gray-800">${bName}</span>
-                            <span class="text-gray-500">➔ 나머지 ${pCount - 1}명에게 총 <b class="text-red-600">${loss}$</b> 지급</span>
-                        </div>
-                        <div class="flex items-start gap-1.5">
-                            <span class="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-bold text-[10px] mt-0.5">수령</span>
-                            <div class="flex-1">
-                                <span class="font-semibold text-gray-800">${receivers}</span>
-                                <span class="text-gray-500 text-block block mt-0.5">(각각 <b class="text-blue-600">+2$</b> 씩 획득)</span>
-                            </div>
-                        </div>
-                    </div>
-                </td>
-            `;
-
-            tr.onclick = () => {
-                trDetail.classList.toggle("hidden");
-            };
-
             tbody.appendChild(tr);
-            tbody.appendChild(trDetail);
         });
     } catch (err) {
-        console.error("기록실을 불러오는 중 오류 발생:", err);
+        console.error("기록실을 불러오는 중 오류 발생 (색인 생성이 필요할 수 있습니다):", err);
     }
 };
 
