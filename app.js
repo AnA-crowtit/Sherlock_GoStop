@@ -1,18 +1,18 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// 🌐 [실시간 환율 변수] 인터넷에서 받아오기 전까지 사용할 기본값(백업)입니다.
+// 🌐 인터넷 실시간 환율 변수
 let exchangeRate = 1400; 
-let currentPlayersArray = []; // 실시간 화면 갱신을 위한 플레이어 저장소
+let currentPlayersArray = []; 
 
-// 🔥 [중요] 본인의 Firebase 프로젝트 설정값(Config)을 여기에 다시 넣어주세요!
+// 🔥 [필수 변경] 위 1번 단계에서 복사한 본인의 파이어베이스 키값들을 여기에 꼭 넣어주세요!
 const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_AUTH_DOMAIN",
-    projectId: "YOUR_PROJECT_ID",
-    storageBucket: "YOUR_STORAGE_BUCKET",
-    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-    appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyBJtR_a23qFwSqrosO8UEUVV0huYWlJeiE",
+  authDomain: "sherlock-gostop.firebaseapp.com",
+  projectId: "sherlock-gostop",
+  storageBucket: "sherlock-gostop.firebasestorage.app",
+  messagingSenderId: "534712745185",
+  appId: "1:534712745185:web:ef742a9109cb1b5b44cba0"
 };
 
 // Firebase 초기화
@@ -23,19 +23,16 @@ const db = getFirestore(app);
 let playersData = {}; 
 let isAdmin = false;
 let unsubscribePending = null;
-const ADMIN_PASSWORD = "club1234"; // 🛡️ 동아리 관리자 비밀번호
+const ADMIN_PASSWORD = "mj050709!"; // 🛡️ 동아리 관리자 비밀번호
 
 // --- 0. 인터넷에서 실시간 달러 환율 자동으로 따오기 ---
 async function fetchRealtimeExchangeRate() {
     try {
-        // 회원가입/키 발급이 필요 없는 신뢰도 높은 무료 환율 API 호출
         const response = await fetch("https://open.er-api.com/v6/latest/USD");
         const data = await response.json();
-        
         if (data && data.rates && data.rates.KRW) {
             exchangeRate = data.rates.KRW;
             console.log(`🌐 인터넷 실시간 환율 반영 완료: 1달러 = ${exchangeRate.toFixed(1)}원`);
-            // 환율을 성공적으로 가져오면 화면을 원화 기준으로 한 번 더 신선하게 새로고침합니다.
             renderPlayersUI();
         }
     } catch (err) {
@@ -49,17 +46,14 @@ onSnapshot(collection(db, "players"), (snapshot) => {
     snapshot.forEach((doc) => {
         currentPlayersArray.push({ id: doc.id, ...doc.data() });
     });
-    // 데이터가 바뀔 때마다 화면 그리기 실행
     renderPlayersUI();
 });
 
-// 화면에 플레이어 목록과 환산 금액을 그려주는 핵심 함수
 function renderPlayersUI() {
     const playerListDiv = document.getElementById("playerList");
     const adminPlayerList = document.getElementById("adminPlayerList");
     const checkboxContainer = document.getElementById("participantCheckboxes");
     
-    // HTML 요소가 아직 로드되지 않았다면 패스
     if (!playerListDiv || !adminPlayerList || !checkboxContainer) return;
 
     playerListDiv.innerHTML = "";
@@ -67,16 +61,14 @@ function renderPlayersUI() {
     checkboxContainer.innerHTML = "";
     playersData = {};
 
-    // 🔄 보유 자산이 많은 순(내림차순) 정렬
+    // 보유 자산 기준 내림차순 정렬
     currentPlayersArray.sort((a, b) => b.total_money - a.total_money);
 
     currentPlayersArray.forEach((player) => {
         playersData[player.id] = player;
-
-        // 💵 인터넷에서 따온 환율로 달러를 원화로 환산 (소수점 버림, 천 단위 콤마)
         const krwMoney = Math.floor(player.total_money * exchangeRate).toLocaleString('ko-KR');
 
-        // [메인] 플레이어 실시간 자산 출력
+        // 메인 화면 출력
         const row = document.createElement("div");
         row.className = "flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-200/60";
         row.innerHTML = `
@@ -88,14 +80,14 @@ function renderPlayersUI() {
         `;
         playerListDiv.appendChild(row);
 
-        // [기록 폼] 참여자 체크박스 생성
+        // 체크박스 생성
         const cbLabel = document.createElement("label");
         cbLabel.className = "flex items-center gap-2 p-1.5 text-sm cursor-pointer hover:bg-gray-100 rounded transition";
         cbLabel.innerHTML = `<input type="checkbox" name="participants" value="${player.id}" onchange="updateBankruptSelect()" class="w-4 h-4 rounded text-blue-600 border-gray-300 focus:ring-blue-500">
                              <span class="text-gray-700 select-none">${player.name}</span>`;
         checkboxContainer.appendChild(cbLabel);
 
-        // [관리자] 플레이어 삭제 목록 생성
+        // 관리자용 목록 생성
         const adminRow = document.createElement("div");
         adminRow.className = "flex justify-between items-center p-2 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded";
         adminRow.innerHTML = `<span class="font-medium text-gray-700">${player.name} (${player.total_money}$ / 약 ${krwMoney}원)</span>
@@ -104,7 +96,7 @@ function renderPlayersUI() {
     });
 }
 
-// --- 2. 체크박스 변경 시 파산자 셀렉트 박스 필터링 동기화 ---
+// --- 2. 체크박스 변경 시 파산자 셀렉트 박스 필터링 ---
 window.updateBankruptSelect = () => {
     const checkedBoxes = document.querySelectorAll('input[name="participants"]:checked');
     const select = document.getElementById("bankruptSelect");
@@ -121,7 +113,7 @@ window.updateBankruptSelect = () => {
     select.value = currentVal;
 };
 
-// --- 3. 플레이어 추가 및 삭제 (관리자 기능) ---
+// --- 3. 플레이어 추가 및 삭제 ---
 window.addPlayer = async () => {
     const nameInput = document.getElementById("newPlayerName");
     const name = nameInput.value.trim();
@@ -142,7 +134,7 @@ window.deletePlayer = async (id, name) => {
     }
 };
 
-// --- 4. 이번 판 기록 신청 (Status: pending) ---
+// --- 4. 이번 판 기록 신청 ---
 window.submitRound = async (e) => {
     e.preventDefault();
     const checkedBoxes = document.querySelectorAll('input[name="participants"]:checked');
@@ -160,7 +152,10 @@ window.submitRound = async (e) => {
             status: "pending",
             created_at: new Date()
         });
-        alert("정산 승인 신청이 접수되었습니다!\n관리자가 승인하면 모든 화면에 즉시 반영됩니다.");
+        
+        // 💬 [요청 반영] 정산 알림 문구 수정 완료!
+        alert("정산 신청이 완료되었습니다!");
+        
         document.getElementById("roundForm").reset();
         document.getElementById("bankruptSelect").innerHTML = '<option value="">-- 파산한 사람 선택 --</option>';
     } catch (err) {
@@ -189,7 +184,7 @@ window.toggleAdminMode = () => {
     }
 };
 
-// --- 6. 대기 중인 정산 신청 실시간 모니터링 ---
+// --- 6. 대기 중인 정산 신청 모니터링 ---
 function listenPendingSettlements() {
     const q = query(collection(db, "settlements"), where("status", "==", "pending"), orderBy("created_at", "desc"));
     unsubscribePending = onSnapshot(q, (snapshot) => {
@@ -226,7 +221,7 @@ window.rejectRound = async (id) => {
     }
 };
 
-// --- 7. 정산 승인 및 트랜잭션 수식 안전 연산 ---
+// --- 7. 정산 승인 및 트랜잭션 연산 ---
 window.approveRound = async (settlementId) => {
     if (!confirm("정산을 승인하시겠습니까?\n이 작업은 즉시 부원들의 자산 잔고를 변경합니다.")) return;
 
@@ -268,7 +263,7 @@ window.approveRound = async (settlementId) => {
     }
 };
 
-// --- 8. 월별 기록실 자동 세팅 및 필터링 조회 ---
+// --- 8. 월별 기록실 조회 ---
 function initMonthFilter() {
     const select = document.getElementById("monthFilter");
     const now = new Date();
@@ -329,7 +324,6 @@ window.loadHistory = async () => {
     });
 };
 
-// 앱 초기 구동 시 실행할 함수들
 initMonthFilter();
-fetchRealtimeExchangeRate(); // 🌐 실시간 환율 호출 시작!
+fetchRealtimeExchangeRate(); 
 setTimeout(() => { loadHistory(); }, 1200);
