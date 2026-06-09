@@ -1,7 +1,11 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
-// 🔥 [중요] 본인의 Firebase 프로젝트 설정값(Config)으로 교체해 주세요!
+// 🌐 [실시간 환율 변수] 인터넷에서 받아오기 전까지 사용할 기본값(백업)입니다.
+let exchangeRate = 1400; 
+let currentPlayersArray = []; // 실시간 화면 갱신을 위한 플레이어 저장소
+
+// 🔥 [중요] 본인의 Firebase 프로젝트 설정값(Config)을 여기에 다시 넣어주세요!
 const firebaseConfig = {
     apiKey: "YOUR_API_KEY",
     authDomain: "YOUR_AUTH_DOMAIN",
@@ -19,34 +23,69 @@ const db = getFirestore(app);
 let playersData = {}; 
 let isAdmin = false;
 let unsubscribePending = null;
-const ADMIN_PASSWORD = "mj050709!"; // 🛡️ 동아리 관리자 비밀번호 (원하는 대로 수정 가능)
+const ADMIN_PASSWORD = "club1234"; // 🛡️ 동아리 관리자 비밀번호
+
+// --- 0. 인터넷에서 실시간 달러 환율 자동으로 따오기 ---
+async function fetchRealtimeExchangeRate() {
+    try {
+        // 회원가입/키 발급이 필요 없는 신뢰도 높은 무료 환율 API 호출
+        const response = await fetch("https://open.er-api.com/v6/latest/USD");
+        const data = await response.json();
+        
+        if (data && data.rates && data.rates.KRW) {
+            exchangeRate = data.rates.KRW;
+            console.log(`🌐 인터넷 실시간 환율 반영 완료: 1달러 = ${exchangeRate.toFixed(1)}원`);
+            // 환율을 성공적으로 가져오면 화면을 원화 기준으로 한 번 더 신선하게 새로고침합니다.
+            renderPlayersUI();
+        }
+    } catch (err) {
+        console.error("환율 정보를 가져오는데 실패하여 기본 환율(1400원)을 사용합니다.", err);
+    }
+}
 
 // --- 1. 실시간 플레이어 데이터 구독 및 UI 동기화 ---
 onSnapshot(collection(db, "players"), (snapshot) => {
+    currentPlayersArray = [];
+    snapshot.forEach((doc) => {
+        currentPlayersArray.push({ id: doc.id, ...doc.data() });
+    });
+    // 데이터가 바뀔 때마다 화면 그리기 실행
+    renderPlayersUI();
+});
+
+// 화면에 플레이어 목록과 환산 금액을 그려주는 핵심 함수
+function renderPlayersUI() {
     const playerListDiv = document.getElementById("playerList");
     const adminPlayerList = document.getElementById("adminPlayerList");
     const checkboxContainer = document.getElementById("participantCheckboxes");
     
+    // HTML 요소가 아직 로드되지 않았다면 패스
+    if (!playerListDiv || !adminPlayerList || !checkboxContainer) return;
+
     playerListDiv.innerHTML = "";
     adminPlayerList.innerHTML = "";
     checkboxContainer.innerHTML = "";
     playersData = {};
 
-    // 가나다순 정렬
-    const playersArr = [];
-    snapshot.forEach((doc) => {
-        playersArr.push({ id: doc.id, ...doc.data() });
-    });
-    playersArr.sort((a, b) => a.name.localeCompare(b.name));
+    // 🔄 보유 자산이 많은 순(내림차순) 정렬
+    currentPlayersArray.sort((a, b) => b.total_money - a.total_money);
 
-    playersArr.forEach((player) => {
+    currentPlayersArray.forEach((player) => {
         playersData[player.id] = player;
+
+        // 💵 인터넷에서 따온 환율로 달러를 원화로 환산 (소수점 버림, 천 단위 콤마)
+        const krwMoney = Math.floor(player.total_money * exchangeRate).toLocaleString('ko-KR');
 
         // [메인] 플레이어 실시간 자산 출력
         const row = document.createElement("div");
         row.className = "flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-200/60";
-        row.innerHTML = `<span class="font-medium text-gray-700">${player.name}</span>
-                         <span class="${player.total_money >= 0 ? 'text-blue-600' : 'text-red-500'} font-bold">${player.total_money}$</span>`;
+        row.innerHTML = `
+            <span class="font-medium text-gray-700">${player.name}</span>
+            <div class="text-right">
+                <span class="${player.total_money >= 0 ? 'text-blue-600' : 'text-red-500'} font-bold">${player.total_money}$</span>
+                <span class="text-xs text-gray-500 block">(약 ${krwMoney}원)</span>
+            </div>
+        `;
         playerListDiv.appendChild(row);
 
         // [기록 폼] 참여자 체크박스 생성
@@ -59,11 +98,11 @@ onSnapshot(collection(db, "players"), (snapshot) => {
         // [관리자] 플레이어 삭제 목록 생성
         const adminRow = document.createElement("div");
         adminRow.className = "flex justify-between items-center p-2 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded";
-        adminRow.innerHTML = `<span class="font-medium text-gray-700">${player.name} (${player.total_money}$)</span>
+        adminRow.innerHTML = `<span class="font-medium text-gray-700">${player.name} (${player.total_money}$ / 약 ${krwMoney}원)</span>
                               <button onclick="deletePlayer('${player.id}', '${player.name}')" class="text-red-500 hover:text-red-700 font-semibold hover:underline">삭제</button>`;
         adminPlayerList.appendChild(adminRow);
     });
-});
+}
 
 // --- 2. 체크박스 변경 시 파산자 셀렉트 박스 필터링 동기화 ---
 window.updateBankruptSelect = () => {
@@ -202,7 +241,6 @@ window.approveRound = async (settlementId) => {
             const N = participant_ids.length; 
             const loss = (N - 1) * 2; 
 
-            // Firestore 트랜잭션 선독취(Pre-read) 규칙 준수
             const playerSnaps = [];
             for (const pId of participant_ids) {
                 const pRef = doc(db, "players", pId);
@@ -210,7 +248,6 @@ window.approveRound = async (settlementId) => {
                 playerSnaps.push({ ref: pRef, snap: pSnap, id: pId });
             }
 
-            // 쓰기 작업 진행
             transaction.update(settleRef, { status: "approved" });
 
             for (const p of playerSnaps) {
@@ -237,7 +274,6 @@ function initMonthFilter() {
     const now = new Date();
     select.innerHTML = "";
     
-    // 최근 6개월 자동 선택 바인딩
     for (let i = 0; i < 6; i++) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const year = d.getFullYear();
@@ -293,6 +329,7 @@ window.loadHistory = async () => {
     });
 };
 
-// 앱 초기 실행 구동 트리거
+// 앱 초기 구동 시 실행할 함수들
 initMonthFilter();
+fetchRealtimeExchangeRate(); // 🌐 실시간 환율 호출 시작!
 setTimeout(() => { loadHistory(); }, 1200);
