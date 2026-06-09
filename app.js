@@ -5,7 +5,7 @@ import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransa
 let exchangeRate = 1400; 
 let currentPlayersArray = []; 
 
-// 🔥 [필수 변경] 위 1번 단계에서 복사한 본인의 파이어베이스 키값들을 여기에 꼭 넣어주세요!
+// 🔥 파이어베이스 설정값 (중복 없이 깔끔하게 하나만 남음!)
 const firebaseConfig = {
   apiKey: "AIzaSyBJtR_a23qFwSqrosO8UEUVV0huYWlJeiE",
   authDomain: "sherlock-gostop.firebaseapp.com",
@@ -47,6 +47,9 @@ onSnapshot(collection(db, "players"), (snapshot) => {
         currentPlayersArray.push({ id: doc.id, ...doc.data() });
     });
     renderPlayersUI();
+    
+    // [버그 수정] 플레이어 정보가 인터넷에서 로드된 '직후'에 기록실을 불러오므로, 탈퇴멤버로 뜨는 일이 절대 없습니다!
+    loadHistory(); 
 });
 
 function renderPlayersUI() {
@@ -153,7 +156,6 @@ window.submitRound = async (e) => {
             created_at: new Date()
         });
         
-        // 💬 [요청 반영] 정산 알림 문구 수정 완료!
         alert("정산 신청이 완료되었습니다!");
         
         document.getElementById("roundForm").reset();
@@ -256,7 +258,6 @@ window.approveRound = async (settlementId) => {
         });
 
         alert("성공적으로 정산 처리되었습니다!");
-        loadHistory(); 
     } catch (err) {
         console.error(err);
         alert("안전 정산 연산(Transaction)에 실패했습니다.");
@@ -283,7 +284,10 @@ function initMonthFilter() {
 }
 
 window.loadHistory = async () => {
-    const selectedMonth = document.getElementById("monthFilter").value;
+    const selectElement = document.getElementById("monthFilter");
+    if (!selectElement) return;
+    
+    const selectedMonth = selectElement.value;
     const [year, month] = selectedMonth.split("-").map(Number);
     
     const startOfFilter = new Date(year, month - 1, 1);
@@ -297,33 +301,38 @@ window.loadHistory = async () => {
         orderBy("created_at", "desc")
     );
 
-    const querySnapshot = await getDocs(q);
-    const tbody = document.getElementById("historyTableBody");
-    tbody.innerHTML = "";
+    try {
+        const querySnapshot = await getDocs(q);
+        const tbody = document.getElementById("historyTableBody");
+        if (!tbody) return;
+        tbody.innerHTML = "";
 
-    if (querySnapshot.empty) {
-        tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-gray-400 italic">해당 월의 승인 완료된 정산 내역이 없습니다.</td></tr>`;
-        return;
+        if (querySnapshot.empty) {
+            tbody.innerHTML = `<tr><td colspan="3" class="p-4 text-center text-gray-400 italic">해당 월의 승인 완료된 정산 내역이 없습니다.</td></tr>`;
+            return;
+        }
+
+        querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            const dateStr = data.created_at ? data.created_at.toDate().toLocaleString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : "-";
+            
+            const pNames = data.participant_ids?.map(id => playersData[id]?.name || "탈퇴 멤버").join(", ") || "-";
+            const bName = playersData[data.bankrupt_player_id]?.name || "탈퇴 멤버";
+
+            const tr = document.createElement("tr");
+            tr.className = "hover:bg-gray-50/70 transition text-gray-700";
+            tr.innerHTML = `
+                <td class="p-3 text-xs text-gray-500 font-mono">${dateStr}</td>
+                <td class="p-3 font-medium">${pNames}</td>
+                <td class="p-3 text-red-600 font-bold">${bName}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    } catch (err) {
+        console.error("기록실을 불러오는 중 오류 발생 (색인 생성이 필요할 수 있습니다):", err);
     }
-
-    querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        const dateStr = data.created_at ? data.created_at.toDate().toLocaleString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : "-";
-        
-        const pNames = data.participant_ids?.map(id => playersData[id]?.name || "탈퇴 멤버").join(", ") || "-";
-        const bName = playersData[data.bankrupt_player_id]?.name || "탈퇴 멤버";
-
-        const tr = document.createElement("tr");
-        tr.className = "hover:bg-gray-50/70 transition text-gray-700";
-        tr.innerHTML = `
-            <td class="p-3 text-xs text-gray-500 font-mono">${dateStr}</td>
-            <td class="p-3 font-medium">${pNames}</td>
-            <td class="p-3 text-red-600 font-bold">${bName}</td>
-        `;
-        tbody.appendChild(tr);
-    });
 };
 
+// 초기 실행 함수들
 initMonthFilter();
-fetchRealtimeExchangeRate(); 
-setTimeout(() => { loadHistory(); }, 1200);
+fetchRealtimeExchangeRate();
