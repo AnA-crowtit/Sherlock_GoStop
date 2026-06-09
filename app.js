@@ -40,6 +40,51 @@ async function fetchRealtimeExchangeRate() {
     }
 }
 
+// --- 0-2. [신규] 현재 전체 자산 기준 최적의 주고받을 돈 계산 알고리즘 ---
+function calculateOptimalDebts(players) {
+    let debtors = [];   // 돈을 줘야 하는 사람들 (-)
+    let creditors = []; // 돈을 받아야 하는 사람들 (+)
+
+    players.forEach(p => {
+        if (p.total_money < 0) {
+            debtors.push({ id: p.id, name: p.name, amount: -p.total_money });
+        } else if (p.total_money > 0) {
+            creditors.push({ id: p.id, name: p.name, amount: p.total_money });
+        }
+    });
+
+    // 금액이 큰 순서대로 정렬하여 매칭 효율성 극대화
+    debtors.sort((a, b) => b.amount - a.amount);
+    creditors.sort((a, b) => b.amount - a.amount);
+
+    let givingText = {};
+    let receivingText = {};
+
+    players.forEach(p => {
+        givingText[p.id] = [];
+        receivingText[p.id] = [];
+    });
+
+    let d = 0, c = 0;
+    while (d < debtors.length && c < creditors.length) {
+        let debtor = debtors[d];
+        let creditor = creditors[c];
+
+        let settledAmount = Math.min(debtor.amount, creditor.amount);
+
+        givingText[debtor.id].push(`${creditor.name}(${settledAmount}$)`);
+        receivingText[creditor.id].push(`${debtor.name}(${settledAmount}$)`);
+
+        debtor.amount -= settledAmount;
+        creditor.amount -= settledAmount;
+
+        if (debtor.amount === 0) d++;
+        if (creditor.amount === 0) c++;
+    }
+
+    return { givingText, receivingText };
+}
+
 // --- 1. 실시간 플레이어 데이터 구독 및 UI 동기화 ---
 onSnapshot(collection(db, "players"), (snapshot) => {
     currentPlayersArray = [];
@@ -65,15 +110,34 @@ function renderPlayersUI() {
     // 보유 자산 기준 내림차순 정렬
     currentPlayersArray.sort((a, b) => b.total_money - a.total_money);
 
+    // 💡 [신규] 최적 송금 네트워크 미리 계산
+    const { givingText, receivingText } = calculateOptimalDebts(currentPlayersArray);
+
     currentPlayersArray.forEach((player) => {
         playersData[player.id] = player;
         const krwMoney = Math.floor(player.total_money * exchangeRate).toLocaleString('ko-KR');
 
-        // 메인 화면 출력
+        // 💡 [신규] 개인별 송금/수령 힌트 라벨 빌드
+        const gives = givingText[player.id] || [];
+        const receives = receivingText[player.id] || [];
+        let settlementHint = "";
+
+        if (gives.length > 0) {
+            settlementHint = `<span class="text-[11px] text-red-500 block font-normal mt-0.5">💸 줘야함: ${gives.join(', ')}</span>`;
+        } else if (receives.length > 0) {
+            settlementHint = `<span class="text-[11px] text-green-600 block font-normal mt-0.5">💰 받아야함: ${receives.join(', ')}</span>`;
+        } else {
+            settlementHint = `<span class="text-[11px] text-gray-400 block font-normal mt-0.5">✅ 정산 완료</span>`;
+        }
+
+        // 메인 화면 출력 (이름 아래에 정산 힌트 주입)
         const row = document.createElement("div");
         row.className = "flex justify-between items-center p-3 bg-gray-50 rounded-lg border border-gray-200/60";
         row.innerHTML = `
-            <span class="font-medium text-gray-700">${player.name}</span>
+            <div>
+                <span class="font-medium text-gray-700">${player.name}</span>
+                ${settlementHint}
+            </div>
             <div class="text-right">
                 <span class="${player.total_money >= 0 ? 'text-blue-600' : 'text-red-500'} font-bold">${player.total_money}$</span>
                 <span class="text-xs text-gray-500 block">(약 ${krwMoney}원)</span>
@@ -88,7 +152,7 @@ function renderPlayersUI() {
                              <span class="text-gray-700 select-none">${player.name}</span>`;
         checkboxContainer.appendChild(cbLabel);
 
-        // 관리자용 목록 생성 (자산 수동 수정 필드 추가)
+        // 관리자용 목록 생성 (자산 수동 수정 필드 포함)
         const adminRow = document.createElement("div");
         adminRow.className = "flex flex-col sm:flex-row sm:items-center justify-between p-2.5 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded gap-2";
         adminRow.innerHTML = `
@@ -142,7 +206,7 @@ window.deletePlayer = async (id, name) => {
     }
 };
 
-// --- 3-2. [신규] 관리자 자산 직접 수정 기능 ---
+// --- 3-2. 관리자 자산 직접 수정 기능 ---
 window.updatePlayerMoney = async (id, name) => {
     const inputElement = document.getElementById(`updateMoney-${id}`);
     const newMoney = parseInt(inputElement.value, 10);
@@ -343,7 +407,6 @@ window.loadHistory = async () => {
             const pNames = data.participant_ids?.map(id => playersData[id]?.name || "탈퇴 멤버").join(", ") || "-";
             const bName = playersData[data.bankrupt_player_id]?.name || "탈퇴 멤버";
 
-            // 메인 정산 데이터 행
             const tr = document.createElement("tr");
             tr.className = "hover:bg-gray-50/70 transition text-gray-700 cursor-pointer border-b last:border-0";
             tr.innerHTML = `
@@ -352,7 +415,6 @@ window.loadHistory = async () => {
                 <td class="p-3 text-red-600 font-bold">${bName} <span class="text-gray-400 text-[10px] font-normal ml-1">▼</span></td>
             `;
 
-            // [신규] 클릭 시 보여줄 상세 자산 흐름 정보 행
             const trDetail = document.createElement("tr");
             trDetail.className = "hidden bg-gray-50/60 text-xs text-gray-600 border-b last:border-0";
 
@@ -381,7 +443,6 @@ window.loadHistory = async () => {
                 </td>
             `;
 
-            // 클릭했을 때 디테일 창 토글 연동
             tr.onclick = () => {
                 trDetail.classList.toggle("hidden");
             };
@@ -390,7 +451,7 @@ window.loadHistory = async () => {
             tbody.appendChild(trDetail);
         });
     } catch (err) {
-        console.error("기록실을 불러오는 중 오류 발생 (색인 생성이 필요할 수 있습니다):", err);
+        console.error("기록실을 불러오는 중 오류 발생:", err);
     }
 };
 
