@@ -1,0 +1,95 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>셜록 고스톱 정산 시스템</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-100 p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        <header class="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-200/50">
+            <h1 class="text-xl font-bold text-gray-800 flex items-center gap-2">🎴 동아리 고스톱 정산소</h1>
+            <button id="adminToggleBtn" onclick="toggleAdminMode()" class="bg-gray-800 text-white text-sm px-4 py-2 rounded-lg hover:bg-gray-700 transition font-medium">
+                관리자 로그인
+            </button>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200/50">
+                <h2 class="text-lg font-bold mb-4 text-gray-700 flex items-center gap-2">👥 플레이어 별 자산</h2>
+                <div id="playerList" class="space-y-2">
+                </div>
+            </section>
+
+            <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200/50">
+                <h2 class="text-lg font-bold mb-4 text-gray-700">📝 이번 판 기록하기</h2>
+                <form id="roundForm" onsubmit="submitRound(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-600 mb-1">1. 이번 판 참여자 선택 (중복 체크)</label>
+                        <div id="participantCheckboxes" class="grid grid-cols-2 gap-2 bg-gray-50 p-3 rounded-lg border max-h-40 overflow-y-auto custom-scrollbar">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-600 mb-1">2. 독박/파산자 선택</label>
+                        <select id="bankruptSelect" class="w-full bg-white border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none" required>
+                            <option value="">-- 파산한 사람 선택 --</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="w-full bg-blue-600 text-white py-2.5 rounded-lg font-bold hover:bg-blue-700 transition shadow-sm">
+                        정산 기록 신청
+                    </button>
+                </form>
+            </section>
+        </div>
+
+        <section id="adminSection" class="hidden bg-red-50/50 p-6 rounded-xl border border-red-200 space-y-6 animate-fade-in">
+            <h2 class="text-lg font-bold text-red-700 flex items-center gap-2">🛡️ 관리자 제어 패널</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white p-4 rounded-lg border border-red-100 shadow-sm">
+                    <h3 class="font-bold text-sm text-gray-700 mb-3">👥 플레이어 관리 (추가/삭제)</h3>
+                    <div class="flex gap-2 mb-3">
+                        <input type="text" id="newPlayerName" placeholder="이름 입력" class="border rounded-lg px-3 py-1.5 text-sm flex-1 focus:ring-2 focus:ring-red-400 focus:outline-none">
+                        <button onclick="addPlayer()" class="bg-green-600 text-white text-sm px-4 py-1.5 rounded-lg font-bold hover:bg-green-700 transition">추가</button>
+                    </div>
+                    <div id="adminPlayerList" class="space-y-1 max-h-40 overflow-y-auto text-sm border p-2 rounded-lg bg-gray-50 custom-scrollbar">
+                    </div>
+                </div>
+
+                <div class="bg-white p-4 rounded-lg border border-red-100 shadow-sm">
+                    <h3 class="font-bold text-sm text-gray-700 mb-3">⏳ 정산 승인 대기 목록</h3>
+                    <div id="pendingList" class="space-y-2 max-h-40 overflow-y-auto text-sm custom-scrollbar">
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200/50">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-gray-700">📜 월별 기록실</h2>
+                <select id="monthFilter" onchange="loadHistory()" class="bg-gray-50 border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                </select>
+            </div>
+            <div class="overflow-x-auto border rounded-lg">
+                <table class="w-full text-left text-sm border-collapse">
+                    <thead>
+                        <tr class="bg-gray-50 border-b text-gray-600 font-semibold">
+                            <th class="p-3">일시</th>
+                            <th class="p-3">참여자 목록</th>
+                            <th class="p-3 text-red-600">파산자 ($-2x)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody" class="divide-y bg-white">
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
