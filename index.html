@@ -51,7 +51,7 @@
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="bg-white p-4 rounded-lg border border-red-100 shadow-sm">
-                    <h3 class="font-bold text-sm text-gray-700 mb-3">👥 플레이어 관리 (추가/삭제)</h3>
+                    <h3 class="font-bold text-sm text-gray-700 mb-3">👥 플레이어 관리 (추가/수정/삭제)</h3>
                     <div class="flex gap-2 mb-3">
                         <input type="text" id="newPlayerName" placeholder="이름 입력" class="border rounded-lg px-3 py-1.5 text-sm flex-1 focus:ring-2 focus:ring-red-400 focus:outline-none">
                         <button onclick="addPlayer()" class="bg-green-600 text-white text-sm px-4 py-1.5 rounded-lg font-bold hover:bg-green-700 transition">추가</button>
@@ -70,7 +70,10 @@
 
         <section class="bg-white p-6 rounded-xl shadow-sm border border-gray-200/50">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-lg font-bold text-gray-700">📜 월별 기록실</h2>
+                <div>
+                    <h2 class="text-lg font-bold text-gray-700">📜 월별 기록실</h2>
+                    <p class="text-xs text-gray-400 mt-0.5">💡 내역을 클릭하면 상세한 돈의 흐름을 볼 수 있습니다.</p>
+                </div>
                 <select id="monthFilter" onchange="loadHistory()" class="bg-gray-50 border rounded-lg p-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
                 </select>
             </div>

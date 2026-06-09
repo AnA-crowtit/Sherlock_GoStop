@@ -1,18 +1,18 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, collection, addDoc, onSnapshot, doc, deleteDoc, runTransaction, query, where, getDocs, orderBy, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 // 🌐 인터넷 실시간 환율 변수
-let exchangeRate = 1400; 
-let currentPlayersArray = []; 
+let exchangeRate = 1400;
+let currentPlayersArray = [];
 
-// 🔥 파이어베이스 설정값 (중복 없이 깔끔하게 하나만 남음!)
+// 🔥 파이어베이스 설정값
 const firebaseConfig = {
-  apiKey: "AIzaSyBJtR_a23qFwSqrosO8UEUVV0huYWlJeiE",
-  authDomain: "sherlock-gostop.firebaseapp.com",
-  projectId: "sherlock-gostop",
-  storageBucket: "sherlock-gostop.firebasestorage.app",
-  messagingSenderId: "534712745185",
-  appId: "1:534712745185:web:ef742a9109cb1b5b44cba0"
+    apiKey: "AIzaSyBJtR_a23qFwSqrosO8UEUVV0huYWlJeiE",
+    authDomain: "sherlock-gostop.firebaseapp.com",
+    projectId: "sherlock-gostop",
+    storageBucket: "sherlock-gostop.firebasestorage.app",
+    messagingSenderId: "534712745185",
+    appId: "1:534712745185:web:ef742a9109cb1b5b44cba0"
 };
 
 // Firebase 초기화
@@ -20,7 +20,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // 전역 상태 변수
-let playersData = {}; 
+let playersData = {};
 let isAdmin = false;
 let unsubscribePending = null;
 const ADMIN_PASSWORD = "mj050709!"; // 🛡️ 동아리 관리자 비밀번호
@@ -47,16 +47,14 @@ onSnapshot(collection(db, "players"), (snapshot) => {
         currentPlayersArray.push({ id: doc.id, ...doc.data() });
     });
     renderPlayersUI();
-    
-    // [버그 수정] 플레이어 정보가 인터넷에서 로드된 '직후'에 기록실을 불러오므로, 탈퇴멤버로 뜨는 일이 절대 없습니다!
-    loadHistory(); 
+    loadHistory();
 });
 
 function renderPlayersUI() {
     const playerListDiv = document.getElementById("playerList");
     const adminPlayerList = document.getElementById("adminPlayerList");
     const checkboxContainer = document.getElementById("participantCheckboxes");
-    
+
     if (!playerListDiv || !adminPlayerList || !checkboxContainer) return;
 
     playerListDiv.innerHTML = "";
@@ -90,11 +88,18 @@ function renderPlayersUI() {
                              <span class="text-gray-700 select-none">${player.name}</span>`;
         checkboxContainer.appendChild(cbLabel);
 
-        // 관리자용 목록 생성
+        // 관리자용 목록 생성 (자산 수동 수정 필드 추가)
         const adminRow = document.createElement("div");
-        adminRow.className = "flex justify-between items-center p-2 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded";
-        adminRow.innerHTML = `<span class="font-medium text-gray-700">${player.name} (${player.total_money}$ / 약 ${krwMoney}원)</span>
-                              <button onclick="deletePlayer('${player.id}', '${player.name}')" class="text-red-500 hover:text-red-700 font-semibold hover:underline">삭제</button>`;
+        adminRow.className = "flex flex-col sm:flex-row sm:items-center justify-between p-2.5 border-b last:border-0 text-xs text-gray-600 hover:bg-gray-100/50 rounded gap-2";
+        adminRow.innerHTML = `
+            <span class="font-medium text-gray-700">${player.name} (현재: ${player.total_money}$)</span>
+            <div class="flex items-center gap-1.5 justify-end">
+                <input type="number" id="updateMoney-${player.id}" value="${player.total_money}" class="w-16 border rounded px-1.5 py-0.5 text-right focus:outline-none focus:ring-1 focus:ring-red-400 font-mono">
+                <span class="text-gray-400">$</span>
+                <button onclick="updatePlayerMoney('${player.id}', '${player.name}')" class="bg-red-500 hover:bg-red-600 text-white px-2 py-0.5 rounded font-semibold transition">수정</button>
+                <button onclick="deletePlayer('${player.id}', '${player.name}')" class="text-gray-400 hover:text-red-600 font-semibold ml-1">삭제</button>
+            </div>
+        `;
         adminPlayerList.appendChild(adminRow);
     });
 }
@@ -104,7 +109,7 @@ window.updateBankruptSelect = () => {
     const checkedBoxes = document.querySelectorAll('input[name="participants"]:checked');
     const select = document.getElementById("bankruptSelect");
     const currentVal = select.value;
-    
+
     select.innerHTML = '<option value="">-- 파산한 사람 선택 --</option>';
     checkedBoxes.forEach(cb => {
         const pId = cb.value;
@@ -121,7 +126,7 @@ window.addPlayer = async () => {
     const nameInput = document.getElementById("newPlayerName");
     const name = nameInput.value.trim();
     if (!name) return alert("플레이어 이름을 입력하세요.");
-    
+
     try {
         await addDoc(collection(db, "players"), { name, total_money: 0 });
         nameInput.value = "";
@@ -134,6 +139,25 @@ window.addPlayer = async () => {
 window.deletePlayer = async (id, name) => {
     if (confirm(`${name} 플레이어를 영구 삭제하시겠습니까?\n(해당 인원의 정산금 누적 데이터가 모두 삭제됩니다)`)) {
         await deleteDoc(doc(db, "players", id));
+    }
+};
+
+// --- 3-2. [신규] 관리자 자산 직접 수정 기능 ---
+window.updatePlayerMoney = async (id, name) => {
+    const inputElement = document.getElementById(`updateMoney-${id}`);
+    const newMoney = parseInt(inputElement.value, 10);
+
+    if (isNaN(newMoney)) return alert("정확한 금액(정수)을 입력해주세요.");
+
+    if (confirm(`${name} 님의 최종 자산을 [ ${newMoney}$ ] 로 강제 수정하시겠습니까?`)) {
+        try {
+            const playerRef = doc(db, "players", id);
+            await updateDoc(playerRef, { total_money: newMoney });
+            alert(`${name} 님의 자산이 성공적으로 변경되었습니다.`);
+        } catch (err) {
+            console.error(err);
+            alert("자산 수정 중 오류가 발생했습니다.");
+        }
     }
 };
 
@@ -155,9 +179,9 @@ window.submitRound = async (e) => {
             status: "pending",
             created_at: new Date()
         });
-        
+
         alert("정산 신청이 완료되었습니다!");
-        
+
         document.getElementById("roundForm").reset();
         document.getElementById("bankruptSelect").innerHTML = '<option value="">-- 파산한 사람 선택 --</option>';
     } catch (err) {
@@ -231,12 +255,12 @@ window.approveRound = async (settlementId) => {
         await runTransaction(db, async (transaction) => {
             const settleRef = doc(db, "settlements", settlementId);
             const settleSnap = await transaction.get(settleRef);
-            
+
             if (!settleSnap.exists() || settleSnap.data().status !== "pending") return;
 
             const { participant_ids, bankrupt_player_id } = settleSnap.data();
-            const N = participant_ids.length; 
-            const loss = (N - 1) * 2; 
+            const N = participant_ids.length;
+            const loss = (N - 1) * 2;
 
             const playerSnaps = [];
             for (const pId of participant_ids) {
@@ -250,9 +274,9 @@ window.approveRound = async (settlementId) => {
             for (const p of playerSnaps) {
                 const currentMoney = p.snap.data().total_money || 0;
                 if (p.id === bankrupt_player_id) {
-                    transaction.update(p.ref, { total_money: currentMoney - loss }); 
+                    transaction.update(p.ref, { total_money: currentMoney - loss });
                 } else {
-                    transaction.update(p.ref, { total_money: currentMoney + 2 }); 
+                    transaction.update(p.ref, { total_money: currentMoney + 2 });
                 }
             }
         });
@@ -269,13 +293,13 @@ function initMonthFilter() {
     const select = document.getElementById("monthFilter");
     const now = new Date();
     select.innerHTML = "";
-    
+
     for (let i = 0; i < 6; i++) {
         const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
         const year = d.getFullYear();
         const month = String(d.getMonth() + 1).padStart(2, '0');
         const value = `${year}-${month}`;
-        
+
         const opt = document.createElement("option");
         opt.value = value;
         opt.text = `${year}년 ${month}월`;
@@ -286,15 +310,15 @@ function initMonthFilter() {
 window.loadHistory = async () => {
     const selectElement = document.getElementById("monthFilter");
     if (!selectElement) return;
-    
+
     const selectedMonth = selectElement.value;
     const [year, month] = selectedMonth.split("-").map(Number);
-    
+
     const startOfFilter = new Date(year, month - 1, 1);
     const endOfFilter = new Date(year, month, 1);
 
     const q = query(
-        collection(db, "settlements"), 
+        collection(db, "settlements"),
         where("status", "==", "approved"),
         where("created_at", ">=", startOfFilter),
         where("created_at", "<", endOfFilter),
@@ -314,19 +338,56 @@ window.loadHistory = async () => {
 
         querySnapshot.forEach((docSnap) => {
             const data = docSnap.data();
-            const dateStr = data.created_at ? data.created_at.toDate().toLocaleString('ko-KR', {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : "-";
-            
+            const dateStr = data.created_at ? data.created_at.toDate().toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : "-";
+
             const pNames = data.participant_ids?.map(id => playersData[id]?.name || "탈퇴 멤버").join(", ") || "-";
             const bName = playersData[data.bankrupt_player_id]?.name || "탈퇴 멤버";
 
+            // 메인 정산 데이터 행
             const tr = document.createElement("tr");
-            tr.className = "hover:bg-gray-50/70 transition text-gray-700";
+            tr.className = "hover:bg-gray-50/70 transition text-gray-700 cursor-pointer border-b last:border-0";
             tr.innerHTML = `
                 <td class="p-3 text-xs text-gray-500 font-mono">${dateStr}</td>
                 <td class="p-3 font-medium">${pNames}</td>
-                <td class="p-3 text-red-600 font-bold">${bName}</td>
+                <td class="p-3 text-red-600 font-bold">${bName} <span class="text-gray-400 text-[10px] font-normal ml-1">▼</span></td>
             `;
+
+            // [신규] 클릭 시 보여줄 상세 자산 흐름 정보 행
+            const trDetail = document.createElement("tr");
+            trDetail.className = "hidden bg-gray-50/60 text-xs text-gray-600 border-b last:border-0";
+
+            const pCount = data.participant_ids?.length || 0;
+            const loss = (pCount - 1) * 2;
+            const receivers = data.participant_ids?.filter(id => id !== data.bankrupt_player_id)
+                .map(id => playersData[id]?.name || "탈퇴 멤버")
+                .join(", ") || "없음";
+
+            trDetail.innerHTML = `
+                <td colspan="3" class="p-3 bg-blue-50/20">
+                    <div class="bg-white p-3 rounded-lg border border-gray-200/80 shadow-inner space-y-2">
+                        <div class="flex items-center gap-1.5">
+                            <span class="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold text-[10px]">지급</span>
+                            <span class="font-bold text-gray-800">${bName}</span>
+                            <span class="text-gray-500">➔ 나머지 ${pCount - 1}명에게 총 <b class="text-red-600">${loss}$</b> 지급</span>
+                        </div>
+                        <div class="flex items-start gap-1.5">
+                            <span class="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-bold text-[10px] mt-0.5">수령</span>
+                            <div class="flex-1">
+                                <span class="font-semibold text-gray-800">${receivers}</span>
+                                <span class="text-gray-500 text-block block mt-0.5">(각각 <b class="text-blue-600">+2$</b> 씩 획득)</span>
+                            </div>
+                        </div>
+                    </div>
+                </td>
+            `;
+
+            // 클릭했을 때 디테일 창 토글 연동
+            tr.onclick = () => {
+                trDetail.classList.toggle("hidden");
+            };
+
             tbody.appendChild(tr);
+            tbody.appendChild(trDetail);
         });
     } catch (err) {
         console.error("기록실을 불러오는 중 오류 발생 (색인 생성이 필요할 수 있습니다):", err);
